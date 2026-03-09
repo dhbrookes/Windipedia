@@ -1,0 +1,15 @@
+# ERA5 data access
+gcsfs==2024.3.1
+zarr==2.18.2
+xarray==2024.5.0
+netCDF4==1.7.1
+
+# Numerical processing
+numpy==1.26.4
+
+# Tile generation
+mercantile==1.2.1
+Pillow==10.3.0
+
+# GCS upload
+google-cloud-storage==2.17.0

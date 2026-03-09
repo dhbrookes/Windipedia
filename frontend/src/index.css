@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Full-viewport map layout — no scroll, no padding */
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background-color: #0f1923;
+  color: #e2e8f0;
+  font-family: 'Inter', system-ui, sans-serif;
+}
+
+/* Mapbox attribution stays readable on dark basemap */
+.mapboxgl-ctrl-attrib-inner a {
+  color: #94a3b8;
+}
