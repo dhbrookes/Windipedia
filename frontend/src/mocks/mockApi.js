@@ -235,7 +235,7 @@ export function buildMockDistribution(variable) {
 }
 
 // ---------------------------------------------------------------------------
-// Annotations: sparse grid of value labels for the map
+// Annotations: staggered grid of value labels (+ direction arrows for vectors)
 // ---------------------------------------------------------------------------
 
 const ANNOTATION_FORMATTERS = {
@@ -246,30 +246,137 @@ const ANNOTATION_FORMATTERS = {
   temp:        (v) => `${Math.round(v)}°`,
 }
 
+// Variables that get a direction arrow alongside the label
+const VECTOR_VARIABLES = new Set(['wind_speed', 'wave_height'])
+
+/**
+ * Bilinearly sample U and V from a field grid at (lat, lon).
+ * Used to compute the direction arrow rotation for vector annotations.
+ */
+function sampleFieldUV(field, lat, lon) {
+  const { lats, lons, u, v, width, height } = field
+  lon = ((lon + 180) % 360 + 360) % 360 - 180
+
+  const latMax = lats[0], latMin = lats[height - 1]
+  const lonMin = lons[0], lonMax = lons[width - 1]
+  const latIdx = (latMax - Math.max(latMin, Math.min(latMax, lat))) / (latMax - latMin) * (height - 1)
+  const lonIdx = (Math.max(lonMin, Math.min(lonMax, lon)) - lonMin) / (lonMax - lonMin) * (width - 1)
+
+  const i0 = Math.min(height - 2, Math.floor(latIdx))
+  const j0 = Math.min(width  - 2, Math.floor(lonIdx))
+  const i1 = i0 + 1, j1 = j0 + 1
+  const dlat = latIdx - i0, dlon = lonIdx - j0
+
+  const idx = (r, c) => r * width + c
+  const interp = (arr) =>
+    arr[idx(i0, j0)] * (1 - dlat) * (1 - dlon) +
+    arr[idx(i0, j1)] * (1 - dlat) * dlon +
+    arr[idx(i1, j0)] * dlat * (1 - dlon) +
+    arr[idx(i1, j1)] * dlat * dlon
+
+  return [interp(u), interp(v)]
+}
+
 /**
  * Build a GeoJSON FeatureCollection of value labels for the given variable.
- * Points are placed on a regular grid (every gridDeg degrees).
- * Each feature has a `label` property with the formatted median value.
+ *
+ * Grid layout: 15° spacing, staggered (odd rows offset by 7.5°) so points
+ * form a quasi-hexagonal pattern instead of a rigid military grid.
+ *
+ * For vector variables (wind_speed, wave_height) each feature also carries
+ * a `rotation` property (degrees clockwise from north) for the arrow icon.
  *
  * @param {string} variable
- * @param {number} gridDeg  Grid spacing in degrees (default 30)
  * @returns {GeoJSON.FeatureCollection}
  */
-export function buildMockAnnotations(variable, gridDeg = 30) {
-  const format = ANNOTATION_FORMATTERS[variable] ?? ((v) => `${Math.round(v)}`)
+export function buildMockAnnotations(variable) {
+  const format   = ANNOTATION_FORMATTERS[variable] ?? ((v) => `${Math.round(v)}`)
+  const isVector = VECTOR_VARIABLES.has(variable)
+  const gridDeg  = 15
+  const halfGrid = gridDeg / 2
+
+  // Pre-build the direction field for vector variables
+  let field = null
+  if (isVector) {
+    field = variable === 'wind_speed' ? buildMockWindField() : buildMockSwellField()
+  }
+
   const features = []
+  let rowIndex = 0
 
   for (let lat = -75; lat <= 75; lat += gridDeg) {
-    for (let lon = -180; lon <= 150; lon += gridDeg) {
-      const dist = mockCellDistribution(variable, lat, lon)
+    // Stagger odd rows by half the grid spacing
+    const lonOffset = (rowIndex % 2 === 1) ? halfGrid : 0
+
+    for (let lon = -180 + lonOffset; lon < 180; lon += gridDeg) {
+      const dist  = mockCellDistribution(variable, Math.round(lat), Math.round(lon))
       const label = format(dist.percentiles.p50)
+
+      let rotation = null
+      if (field) {
+        const [u, v] = sampleFieldUV(field, lat, lon)
+        // atan2(u, v): angle from north, positive = clockwise (Mapbox icon-rotate convention)
+        rotation = Math.round(Math.atan2(u, v) * 180 / Math.PI)
+      }
+
       features.push({
         type: 'Feature',
         geometry: { type: 'Point', coordinates: [lon, lat] },
-        properties: { label },
+        properties: { label, rotation },
       })
     }
+
+    rowIndex++
   }
 
   return { type: 'FeatureCollection', features }
+}
+
+// ---------------------------------------------------------------------------
+// Scalar field: flat 1° resolution median-value grid for ScalarAnnotations
+// ---------------------------------------------------------------------------
+
+const UNIT_MAP = {
+  wind_speed: 'kts', pressure: 'hPa', wave_height: 'm', precip: 'mm/day', temp: '°C',
+}
+
+/**
+ * Build a synthetic global scalar field at 1° resolution.
+ * Returns the same shape as GET /api/field/{variable}/...
+ *
+ * Values are the median (p50) of the mock distribution at each 1° cell,
+ * generated analytically so it matches what ScalarAnnotations expects.
+ *
+ * @param {string} variable
+ * @returns {{ variable, unit, resolution, width, height, la1, lo1, values }}
+ */
+export function getMockScalarField(variable) {
+  const varDef = VARIABLES[variable]
+  const { min, max } = varDef
+  const range = max - min
+
+  // 1° resolution: latitudes 90 → -90, longitudes -180 → 180
+  const la1 = 90, lo1 = -180
+  const resolution = 1.0
+  const height = 181  // 90 to -90 inclusive
+  const width  = 361  // -180 to 180 inclusive
+
+  const values = new Array(height * width)
+
+  for (let row = 0; row < height; row++) {
+    const lat = la1 - row * resolution
+    for (let col = 0; col < width; col++) {
+      const lon = lo1 + col * resolution
+      const spatialFactor = (
+        Math.sin(lat * Math.PI / 90) * 0.4 +
+        Math.cos(lon * Math.PI / 180) * 0.2 +
+        1
+      ) / 2
+      // p50 of a centred Gaussian = centre value
+      const center = min + range * (0.2 + spatialFactor * 0.6)
+      values[row * width + col] = Math.round(center * 10) / 10
+    }
+  }
+
+  return { variable, unit: UNIT_MAP[variable] ?? '', resolution, width, height, la1, lo1, values }
 }

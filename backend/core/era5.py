@@ -185,8 +185,10 @@ def _values_to_rgba(variable: str, data: np.ndarray, alpha: int = 230) -> np.nda
 
 def open_zarr_store(gcs_path: str) -> Any:
     """
-    Open the ARCO ERA5 Zarr dataset from GCS and return an xr.Dataset.
+    Open the ARCO ERA5 Zarr dataset and return an xr.Dataset.
 
+    Accepts either a GCS path (gs://…) or a local directory path.
+    Local paths are opened directly with xarray/zarr — no GCP credentials needed.
     This is a lazy open — no data is downloaded until .load() or .compute()
     is called. The returned Dataset should be stored in app.state and reused
     across requests; reopening per-request is expensive (~1–2 s of network round trips).
@@ -195,7 +197,6 @@ def open_zarr_store(gcs_path: str) -> Any:
     For the cache bucket you'll need ADC or a service account key.
     """
     try:
-        import gcsfs   # type: ignore
         import xarray as xr  # type: ignore
     except ImportError as e:
         raise ImportError(
@@ -203,9 +204,21 @@ def open_zarr_store(gcs_path: str) -> Any:
         ) from e
 
     logger.info("Opening ERA5 Zarr store: %s", gcs_path)
-    fs = gcsfs.GCSFileSystem(token="anon")
-    store = fs.get_mapper(gcs_path)
-    ds = xr.open_zarr(store, consolidated=True)
+
+    if gcs_path.startswith("gs://"):
+        try:
+            import gcsfs  # type: ignore
+        except ImportError as e:
+            raise ImportError(
+                f"gcsfs is required for GCS paths: {e}. Run: pip install gcsfs"
+            ) from e
+        fs = gcsfs.GCSFileSystem(token="anon")
+        store = fs.get_mapper(gcs_path)
+        ds = xr.open_zarr(store, consolidated=True)
+    else:
+        # Local Zarr directory — opened directly, no GCP credentials required
+        ds = xr.open_zarr(gcs_path)
+
     logger.info(
         "Zarr store opened. Variables: %d, time range: %s to %s",
         len(ds.data_vars),
@@ -855,6 +868,78 @@ def compute_wind_field(
         "width":  len(lons),
         "height": len(lats),
     }
+
+
+def compute_scalar_field(
+    ds: Any,
+    variable: str,
+    start_year: int,
+    end_year: int,
+    start_month: int,
+    end_month: int,
+    hour_utc: str,
+    averaging: str,
+    update_progress=None,
+) -> dict:
+    """
+    Compute a global 1° resolution scalar field (median value per cell).
+
+    Returns a dict ready to JSON-serialise:
+      variable, unit, resolution, width, height, la1, lo1,
+      values — flat list [height × width], row-major N→S, median in display units.
+
+    Used by the frontend ScalarAnnotations component.
+    """
+    if update_progress: update_progress(0.02)
+
+    ds_sub, era5_var_names, config = _subset_da(
+        ds, variable, start_year, end_year, start_month, end_month, hour_utc
+    )
+    ds_sub = ds_sub.isel(
+        latitude=slice(None, None, 4),
+        longitude=slice(None, None, 4),
+    )
+    if update_progress: update_progress(0.10)
+
+    values, lats, lons, _ = _load_values(ds_sub, variable, era5_var_names, config)
+    # values: (n_times, n_lats, n_lons)
+    if update_progress: update_progress(0.70)
+
+    median_grid = np.nanmedian(values, axis=0).astype(np.float32)
+    # Ensure N→S order (la1=90)
+    if lats[0] < lats[-1]:
+        median_grid = median_grid[::-1, :]
+        lats = lats[::-1]
+
+    if update_progress: update_progress(0.95)
+
+    unit_map = {
+        "wind_speed": "kts", "wind_dir": "deg", "pressure": "hPa",
+        "wave_height": "m",  "precip": "mm/day", "temp": "°C",
+    }
+    flat = [round(float(v), 2) if not np.isnan(v) else None for v in median_grid.ravel()]
+
+    if update_progress: update_progress(1.0)
+    return {
+        "variable":   variable,
+        "unit":       unit_map.get(variable, ""),
+        "resolution": 1.0,
+        "width":      int(median_grid.shape[1]),
+        "height":     int(median_grid.shape[0]),
+        "la1":        float(lats[0]),
+        "lo1":        float(lons[0]),
+        "values":     flat,
+    }
+
+
+def make_field_cache_key(
+    variable: str,
+    start_year: int, end_year: int,
+    start_month: int, end_month: int,
+    hour_utc: str, averaging: str,
+) -> str:
+    canonical = f"field|{variable}|{start_year}|{end_year}|{start_month}|{end_month}|{hour_utc}|{averaging}"
+    return hashlib.md5(canonical.encode()).hexdigest()
 
 
 def make_distribution_cache_key(

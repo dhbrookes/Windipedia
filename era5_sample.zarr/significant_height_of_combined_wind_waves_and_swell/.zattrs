@@ -1,0 +1,10 @@
+{
+  "long_name": "Significant height of combined wind waves and swell",
+  "short_name": "swh",
+  "units": "m",
+  "_ARRAY_DIMENSIONS": [
+    "time",
+    "latitude",
+    "longitude"
+  ]
+}

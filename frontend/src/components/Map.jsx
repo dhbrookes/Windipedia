@@ -3,7 +3,8 @@ import mapboxgl from 'mapbox-gl'
 import { useTileLayer } from '../hooks/useTileLayer'
 import { useWindParticles } from '../hooks/useWindParticles'
 import { useSwellParticles } from '../hooks/useSwellParticles'
-import { useValueAnnotations } from '../hooks/useValueAnnotations'
+import { useScalarField } from '../hooks/useScalarField'
+import ScalarAnnotations from './ScalarAnnotations'
 
 // Mapbox token is injected via Vite's env system at build time.
 // Set VITE_MAPBOX_TOKEN in your .env file (see .env.example).
@@ -75,8 +76,8 @@ export default function Map({
   // Animated swell dot overlay (only active for wave_height variable)
   useSwellParticles(map, params)
 
-  // Sparse numeric value labels at a grid of lat/lon points
-  useValueAnnotations(map, params)
+  // Scalar field for annotations (1° resolution median values)
+  const { field, loading: fieldLoading } = useScalarField(params.variable, params)
 
   // Tile loading state: Mapbox fires 'dataloading' when any source begins fetching
   // and 'idle' when all sources are done and the map has re-rendered.
@@ -137,7 +138,11 @@ export default function Map({
     return () => map.off('click', onClick)
   }, [map, onMapClick])
 
-  return <div ref={containerRef} className="w-full h-full" />
+  return (
+    <div ref={containerRef} className="w-full h-full">
+      <ScalarAnnotations map={map} field={field} loading={fieldLoading} variable={params.variable} />
+    </div>
+  )
 }
 
 /**

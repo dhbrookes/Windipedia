@@ -1,11 +1,9 @@
 /**
  * Animated wind particle overlay — Windy/Ventusky style flow lines.
  *
- * Fetches a U/V wind field from the backend (or mock) and animates
- * thousands of particles on a canvas overlay, showing wind direction and
- * relative speed via flow trails.
- *
- * Only active when params.variable === 'wind_speed'.
+ * Always active regardless of the selected variable — provides persistent
+ * background flow context. Line size scales with zoom so particles appear
+ * geographically proportional (smaller at low zoom, larger when zoomed in).
  */
 
 import { useEffect, useRef } from 'react'
@@ -65,8 +63,6 @@ function sampleUV(field, lat, lon) {
 // ---------------------------------------------------------------------------
 
 export function useWindParticles(map, params) {
-  const enabled = params.variable === 'wind_speed'
-
   const fieldRef     = useRef(null)
   const particlesRef = useRef([])
   const animRef      = useRef(null)
@@ -74,8 +70,6 @@ export function useWindParticles(map, params) {
 
   // --- Fetch wind field whenever params change ---
   useEffect(() => {
-    if (!enabled) return
-
     fieldRef.current = null  // clear while fetching
 
     const { startYear, endYear, startMonth, endMonth, hourUtc, averaging } = params
@@ -102,27 +96,17 @@ export function useWindParticles(map, params) {
 
     fetchField()
     return () => { cancelled = true }
-  }, [enabled, params])
+  }, [params])
 
   // --- Set up canvas + animation loop ---
   useEffect(() => {
     if (!map) return
 
-    if (!enabled) {
-      // Remove canvas if switching away from wind variable
-      cancelAnimationFrame(animRef.current)
-      if (canvasRef.current) {
-        canvasRef.current.remove()
-        canvasRef.current = null
-      }
-      return
-    }
-
     const container = map.getContainer()
 
     // Create canvas overlay (pointer-events: none so map clicks pass through)
     const canvas = document.createElement('canvas')
-    canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;z-index:1;'
+    canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;z-index:2;'
     container.appendChild(canvas)
     canvasRef.current = canvas
 
@@ -167,9 +151,11 @@ export function useWindParticles(map, params) {
       const H     = canvas.height
       const field = fieldRef.current
 
-      // Fade previous frame (creates the trailing effect)
+      // Fade previous frame toward transparent (destination-out avoids black accumulation)
+      ctx.globalCompositeOperation = 'destination-out'
       ctx.fillStyle = `rgba(0,0,0,${FADE_ALPHA})`
       ctx.fillRect(0, 0, W, H)
+      ctx.globalCompositeOperation = 'source-over'
 
       if (field && map) {
         ctx.save()
@@ -183,8 +169,11 @@ export function useWindParticles(map, params) {
             // Dead air: just age the particle
             p.age++
           } else {
-            const nx = p.x + u * SPEED_SCALE
-            const ny = p.y - v * SPEED_SCALE  // screen Y inverted (north = up)
+            // Scale movement and line width with zoom so particles appear
+            // geographically proportional (smaller at low zoom, larger when zoomed in)
+            const zoomScale = Math.max(0.12, map.getZoom() / 3)
+            const nx = p.x + u * SPEED_SCALE * zoomScale
+            const ny = p.y - v * SPEED_SCALE * zoomScale  // screen Y inverted
 
             // Speed-keyed color: calm→blue-white, strong→bright white
             const t     = Math.min(1, speed / 18)
@@ -197,7 +186,7 @@ export function useWindParticles(map, params) {
             ctx.moveTo(p.x, p.y)
             ctx.lineTo(nx, ny)
             ctx.strokeStyle = `rgba(${r},${g},${b},${alpha})`
-            ctx.lineWidth   = 0.6 + t * 1.2
+            ctx.lineWidth   = (0.6 + t * 1.2) * zoomScale
             ctx.stroke()
 
             p.x = nx
@@ -226,5 +215,5 @@ export function useWindParticles(map, params) {
       canvas.remove()
       canvasRef.current = null
     }
-  }, [map, enabled])  // re-run only when map instance or enabled flag changes
+  }, [map])  // re-run only when the map instance changes
 }

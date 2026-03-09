@@ -29,7 +29,7 @@ from pydantic import BaseModel
 from core.config import get_settings
 from core.era5 import open_zarr_store, compute_tile_png, make_cache_key, make_param_key, create_mock_dataset
 from core.gcs import put_cached_tile
-from routers import tiles, distributions, wind
+from routers import tiles, distributions, wind, field
 
 logging.basicConfig(
     level=logging.DEBUG if os.getenv("ENVIRONMENT", "development") == "development" else logging.INFO,
@@ -89,6 +89,7 @@ app.add_middleware(
 app.include_router(tiles.router, prefix="/tiles", tags=["tiles"])
 app.include_router(distributions.router, prefix="/api", tags=["distributions"])
 app.include_router(wind.router, prefix="/api", tags=["wind"])
+app.include_router(field.router, prefix="/api", tags=["field"])
 
 
 # ---------------------------------------------------------------------------

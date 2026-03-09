@@ -113,7 +113,7 @@ export function useSwellParticles(map, params) {
     const container = map.getContainer()
 
     const canvas = document.createElement('canvas')
-    canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;z-index:1;'
+    canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;z-index:2;'
     container.appendChild(canvas)
     canvasRef.current = canvas
 
@@ -156,9 +156,11 @@ export function useSwellParticles(map, params) {
       const H     = canvas.height
       const field = fieldRef.current
 
-      // Fade previous frame
+      // Fade previous frame toward transparent (destination-out avoids black accumulation)
+      ctx.globalCompositeOperation = 'destination-out'
       ctx.fillStyle = `rgba(0,0,0,${FADE_ALPHA})`
       ctx.fillRect(0, 0, W, H)
+      ctx.globalCompositeOperation = 'source-over'
 
       if (field && map) {
         ctx.save()

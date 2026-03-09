@@ -74,6 +74,64 @@ Expected output: all tests pass. Key tests:
 
 ---
 
+## Stage 3a — Backend with downloaded ERA5 snapshot (no GCP account needed)
+
+**Goal**: Run the full backend with real ERA5 data and a local file cache — no GCP credentials or network access after the one-time download.
+
+**Requirements**: Internet access for the initial download (~288 MB transfer). Python dependencies: `gcsfs xarray zarr numpy tqdm`.
+
+```bash
+# One-time: download ~50 MB local ERA5 snapshot (takes ~5 min on a typical connection)
+cd pipeline
+pip install gcsfs xarray zarr numpy tqdm   # skip packages already installed
+python download_sample.py --year 2020 --output ../era5_sample.zarr
+# Expected: era5_sample.zarr/ directory, ~50 MB on disk
+# Grid: 12 timesteps × 91 lat × 181 lon at 2° resolution
+
+# Start backend pointing at local Zarr + local tile cache (no GCS writes)
+cd ../backend
+source .venv/bin/activate
+ERA5_ZARR_PATH=../era5_sample.zarr \
+TILE_CACHE_BUCKET=./local_cache    \
+uvicorn main:app --port 8000
+```
+
+In another terminal:
+
+```bash
+# Verify backend is ready
+curl http://localhost:8000/health
+# Expected: {"status":"ok","zarr_ready":true,"placeholder_mode":false}
+
+# Request a zoom-0 tile (whole world, wind speed)
+curl "http://localhost:8000/tiles/wind_speed/2020/2020/1/12/all/monthly/0/0/0.png" \
+  --output /tmp/t.png
+ls -lh /tmp/t.png
+# Expected: HTTP 200, file > 2 KB (real color gradient, not placeholder grey)
+
+# Second request is served instantly from local_cache/
+curl "http://localhost:8000/tiles/wind_speed/2020/2020/1/12/all/monthly/0/0/0.png" \
+  --output /dev/null -w "HTTP %{http_code} in %{time_total}s\n"
+# Expected: HTTP 200 in < 0.05 s
+```
+
+Frontend (optional):
+
+```bash
+# In frontend/.env set VITE_MOCK_API=false, then:
+cd frontend && npm run dev
+```
+
+Verify:
+
+- [ ] `/health` returns `zarr_ready: true`
+- [ ] Tile PNG > 2 KB and shows visible color variation (not a solid block)
+- [ ] `local_cache/cache/*.png` files appear after first tile request
+- [ ] Subsequent tile requests for the same params complete instantly (< 50 ms)
+- [ ] Frontend tiles, annotations, and histogram popup all show real values
+
+---
+
 ## Stage 3 — Backend with real ERA5 (small region, live GCS)
 
 **Goal**: Verify ERA5 Zarr access works and tiles render real data.
