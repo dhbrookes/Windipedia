@@ -152,8 +152,9 @@ async def get_tile(
     if z == 0:
         jobs.pop(job_id, None)
 
-    # Upload to GCS cache without blocking the response
-    asyncio.create_task(
+    # Upload to GCS cache without blocking the response.
+    # run_in_executor returns a Future, not a coroutine — use ensure_future (not create_task).
+    asyncio.ensure_future(
         loop.run_in_executor(
             None, put_cached_tile, settings.tile_cache_bucket, cache_key, png_bytes
         )

@@ -216,8 +216,10 @@ def open_zarr_store(gcs_path: str) -> Any:
         store = fs.get_mapper(gcs_path)
         ds = xr.open_zarr(store, consolidated=True)
     else:
-        # Local Zarr directory — opened directly, no GCP credentials required
-        ds = xr.open_zarr(gcs_path)
+        # Local Zarr directory — opened directly, no GCP credentials required.
+        # consolidated=False reads per-variable metadata rather than .zmetadata,
+        # which is more robust for zarr v2 stores written under zarr v3.
+        ds = xr.open_zarr(gcs_path, consolidated=False)
 
     logger.info(
         "Zarr store opened. Variables: %d, time range: %s to %s",
@@ -582,7 +584,7 @@ def _load_values(ds_sub: Any, variable: str, era5_var_names: list,
     Load data into memory and apply unit conversions.
 
     Returns (values_3d, lats, lons, n_samples) where values_3d has shape
-    (n_times, n_lats, n_lons) in display units.
+    (n_times, n_lats, n_lons) in display units, with lons in −180 to 180.
     """
     n_samples = int(ds_sub.time.size)
 
@@ -598,6 +600,15 @@ def _load_values(ds_sub: Any, variable: str, era5_var_names: list,
         values = config["convert"](u, v)
         lats = ds_sub[era5_var_names[0]].latitude.values
         lons = ds_sub[era5_var_names[0]].longitude.values
+
+    # Normalise longitudes to −180 to 180 (ARCO uses −180→180 natively but
+    # locally-downloaded zarrs may use 0→360 depending on the source chunk).
+    if lons.max() > 180:
+        lons = lons.copy()
+        lons[lons > 180] -= 360
+        sort_idx = np.argsort(lons)
+        lons = lons[sort_idx]
+        values = values[:, :, sort_idx]
 
     return values, lats, lons, n_samples
 
@@ -639,11 +650,15 @@ def compute_distribution(
         ds, variable, start_year, end_year, start_month, end_month, hour_utc
     )
 
-    # Downsample to 1-degree resolution (every 4th ERA5 cell at 0.25 deg)
-    # This is critical for response size: 721x1440 -> ~180x360 cells
+    # Downsample to ~1-degree resolution.
+    # Stride is computed from the actual zarr resolution so this works for both
+    # the native 0.25° ARCO ERA5 grid and the 2° local sample zarr.
+    lat_vals = ds_sub[era5_var_names[0]].latitude.values
+    lat_spacing = abs(float(lat_vals[1]) - float(lat_vals[0])) if len(lat_vals) > 1 else 0.25
+    stride = max(1, round(1.0 / lat_spacing))
     ds_sub = ds_sub.isel(
-        latitude=slice(None, None, 4),
-        longitude=slice(None, None, 4),
+        latitude=slice(None, None, stride),
+        longitude=slice(None, None, stride),
     )
 
     if update_progress: update_progress(0.10)
@@ -831,9 +846,6 @@ def compute_wind_field(
     U/V are in raw m/s (not knots) — the frontend uses them only for
     direction and relative speed, not for display.
     """
-    # Stride in ERA5 indices: ERA5 is 0.25°, so stride=8 gives 2° resolution
-    stride = max(1, step_deg * 4)
-
     ds_sub = ds[["10m_u_component_of_wind", "10m_v_component_of_wind"]]
     ds_sub = ds_sub.sel(time=slice(f"{start_year}-01-01", f"{end_year}-12-31"))
 
@@ -847,6 +859,12 @@ def compute_wind_field(
     if hour_utc != "all":
         ds_sub = ds_sub.sel(time=ds_sub.time.dt.hour == int(hour_utc))
 
+    # Compute stride from actual zarr resolution so this works for both
+    # the native 0.25° ARCO ERA5 grid and the 2° local sample zarr.
+    lat_vals = ds_sub["10m_u_component_of_wind"].latitude.values
+    lat_spacing = abs(float(lat_vals[1]) - float(lat_vals[0])) if len(lat_vals) > 1 else 0.25
+    stride = max(1, round(step_deg / lat_spacing))
+
     ds_sub = ds_sub.isel(
         latitude=slice(None, None, stride),
         longitude=slice(None, None, stride),
@@ -857,8 +875,17 @@ def compute_wind_field(
 
     u_arr = u_da.values.astype(np.float32)
     v_arr = v_da.values.astype(np.float32)
-    lats = u_da.latitude.values.tolist()
-    lons = u_da.longitude.values.tolist()
+    lats = u_da.latitude.values
+
+    # Normalise longitudes to −180 to 180 (ARCO ERA5 uses −180→180 natively,
+    # but locally-downloaded zarrs may use 0→360 depending on the source chunk).
+    lons = u_da.longitude.values.copy()
+    if lons.max() > 180:
+        lons[lons > 180] -= 360
+        sort_idx = np.argsort(lons)
+        lons = lons[sort_idx]
+        u_arr = u_arr[:, sort_idx]
+        v_arr = v_arr[:, sort_idx]
 
     return {
         "lats":   [round(float(x), 2) for x in lats],
@@ -895,9 +922,12 @@ def compute_scalar_field(
     ds_sub, era5_var_names, config = _subset_da(
         ds, variable, start_year, end_year, start_month, end_month, hour_utc
     )
+    lat_vals = ds_sub[era5_var_names[0]].latitude.values
+    lat_spacing = abs(float(lat_vals[1]) - float(lat_vals[0])) if len(lat_vals) > 1 else 0.25
+    stride = max(1, round(1.0 / lat_spacing))
     ds_sub = ds_sub.isel(
-        latitude=slice(None, None, 4),
-        longitude=slice(None, None, 4),
+        latitude=slice(None, None, stride),
+        longitude=slice(None, None, stride),
     )
     if update_progress: update_progress(0.10)
 

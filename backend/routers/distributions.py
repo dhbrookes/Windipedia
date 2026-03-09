@@ -123,7 +123,7 @@ async def get_distribution(
         logger.exception("Distribution compute failed for %s: %s", variable, exc)
         raise HTTPException(500, "Distribution computation failed")
 
-    asyncio.create_task(
+    asyncio.ensure_future(
         loop.run_in_executor(
             None, put_cached_distribution, settings.tile_cache_bucket, cache_key, data
         )
@@ -200,7 +200,7 @@ async def get_exceedance_tile(
         logger.exception("Exceedance tile failed for %s z=%d/%d/%d: %s", variable, z, x, y, exc)
         return Response(content=TRANSPARENT_PNG, media_type="image/png")
 
-    asyncio.create_task(
+    asyncio.ensure_future(
         loop.run_in_executor(
             None, put_cached_tile, settings.tile_cache_bucket, cache_key, png_bytes
         )

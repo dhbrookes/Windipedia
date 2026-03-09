@@ -95,13 +95,34 @@ def download(year: int, resolution_deg: float, output: str) -> None:
     ds_out = xr.Dataset(arrays)
 
     print(f"\nSaving to {output} …")
-    # zarr_format=2 ensures compatibility with zarr v3 installs — the source ARCO
-    # Zarr uses numcodecs Blosc (a v2 codec) which zarr v3 rejects when writing
-    # unless told to produce a v2-format store.
-    ds_out.to_zarr(output, mode="w", zarr_format=2)
+    # zarr 2.x always writes zarr v2 format — no extra flag needed.
+    ds_out.to_zarr(output, mode="w")
+
+    # Write consolidated metadata so xr.open_zarr can find all variables reliably.
+    try:
+        import zarr  # type: ignore
+        zarr.consolidate_metadata(output)
+        print("Consolidated metadata written (.zmetadata)")
+    except Exception as e:
+        print(f"Note: could not write consolidated metadata: {e}")
+
     print(f"Done. Variables: {list(ds_out.data_vars)}")
     print(f"      Time range: {ds_out.time.values[0]} → {ds_out.time.values[-1]}")
     print(f"      Grid: {ds_out.dims}")
+
+    # Read-back verification: load one value per variable to confirm the zarr is readable.
+    print("\nVerifying read-back …")
+    try:
+        ds_check = xr.open_zarr(output, consolidated=False)
+        for var in ERA5_VARS:
+            if var in ds_check:
+                val = float(ds_check[var].isel(time=0, latitude=0, longitude=0).values)
+                print(f"  ✓ {var}: sample={val:.4f}")
+            else:
+                print(f"  ✗ {var}: NOT FOUND in saved zarr")
+    except Exception as e:
+        print(f"  Read-back failed: {e}")
+
     print(f"\nTo use with the backend:")
     print(f"  ERA5_ZARR_PATH={output} TILE_CACHE_BUCKET=./local_cache uvicorn main:app --port 8000")
 

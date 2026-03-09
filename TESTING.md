@@ -2,6 +2,22 @@
 
 Four stages of testing — from no-dependency unit tests up to full end-to-end with real ERA5 data.
 
+## One-time setup — unified Python environment
+
+All Python code (backend + pipeline) shares a single venv at the repo root.
+
+```bash
+# From repo root
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+All subsequent Python commands assume this venv is active. Activate it with:
+```bash
+source /workspaces/Windipedia/.venv/bin/activate
+```
+
 ---
 
 ## Stage 1 — Frontend only (no backend)
@@ -40,15 +56,11 @@ Open http://localhost:3000 and verify:
 
 **Goal**: Verify backend Python logic without GCS or network access.
 
-**Setup**: Install backend dependencies, set `MOCK_ERA5=true`.
+**Setup**: Root venv must be active (see one-time setup above).
 
 ```bash
-cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
 # Run all tests
+cd backend
 MOCK_ERA5=true pytest tests/ -v
 
 # Run specific test files
@@ -81,16 +93,17 @@ Expected output: all tests pass. Key tests:
 **Requirements**: Internet access for the initial download (~288 MB transfer). Python dependencies: `gcsfs xarray zarr numpy tqdm`.
 
 ```bash
+# Activate root venv if not already active
+source /workspaces/Windipedia/.venv/bin/activate
+
 # One-time: download ~50 MB local ERA5 snapshot (takes ~5 min on a typical connection)
 cd pipeline
-pip install gcsfs xarray zarr numpy tqdm   # skip packages already installed
 python download_sample.py --year 2020 --output ../era5_sample.zarr
 # Expected: era5_sample.zarr/ directory, ~50 MB on disk
 # Grid: 12 timesteps × 91 lat × 181 lon at 2° resolution
 
 # Start backend pointing at local Zarr + local tile cache (no GCS writes)
 cd ../backend
-source .venv/bin/activate
 ERA5_ZARR_PATH=../era5_sample.zarr \
 TILE_CACHE_BUCKET=./local_cache    \
 uvicorn main:app --port 8000
@@ -122,13 +135,22 @@ Frontend (optional):
 cd frontend && npm run dev
 ```
 
+> **Year range**: the snapshot only covers 2020. Set the start/end year to **2020–2020**
+> in the control panel to match the available data. Requesting years outside 2020 produces
+> blank tiles (no data in that range).
+>
+> **Histogram popup**: click anywhere on the map to open the histogram. It does not appear
+> automatically — it requires a click.
+
 Verify:
 
 - [ ] `/health` returns `zarr_ready: true`
 - [ ] Tile PNG > 2 KB and shows visible color variation (not a solid block)
 - [ ] `local_cache/cache/*.png` files appear after first tile request
 - [ ] Subsequent tile requests for the same params complete instantly (< 50 ms)
-- [ ] Frontend tiles, annotations, and histogram popup all show real values
+- [ ] All 6 variables render (switch variable buttons — each should change the tile colors)
+- [ ] Scalar annotations (numbers) appear on the map
+- [ ] Clicking the map opens the histogram popup with bars
 
 ---
 
@@ -139,11 +161,8 @@ Verify:
 **Requirements**: GCP credentials (read-only to `gcp-public-data-arco-era5`). Ideally run from `us-central1` to avoid egress costs (~$0.08/GB).
 
 ```bash
-cd backend
-source .venv/bin/activate
-
 # Check ERA5 store is accessible (downloads metadata only)
-cd ../pipeline
+cd pipeline
 python explore_era5.py --info-only
 
 # Start the backend with real data (no GCS write cache needed)

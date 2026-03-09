@@ -1,7 +1,7 @@
 {
-  "units": "hours since 1900-01-01",
-  "calendar": "proleptic_gregorian",
-  "_ARRAY_DIMENSIONS": [
-    "time"
-  ]
+    "_ARRAY_DIMENSIONS": [
+        "time"
+    ],
+    "calendar": "proleptic_gregorian",
+    "units": "hours since 1900-01-01"
 }
